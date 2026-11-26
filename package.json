@@ -1,0 +1,17 @@
+{
+  "name": "lol-draft-companion",
+  "version": "0.3.2",
+  "private": true,
+  "type": "module",
+  "description": "League of Legends Ban/Pick recommendation companion with Riot Match-V5 stats, Vertex AI Gemini 4 Coach, and 1-click LCU reflection",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "start": "node src/server/startCli.ts",
+    "test": "node --test src/tests/*.test.ts",
+    "sync:ddragon": "node src/collector/syncDdragonCli.ts",
+    "collect:stats": "node src/collector/collectCli.ts",
+    "aggregate:stats": "node src/collector/aggregateCli.ts"
+  }
+}
