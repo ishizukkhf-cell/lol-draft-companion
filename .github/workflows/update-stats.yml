@@ -1,0 +1,102 @@
+name: Update LoL Stats Feed
+
+on:
+  schedule:
+    # Daily at 04:00 JST (19:00 UTC)
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+    inputs:
+      matches:
+        description: 'Target new matches to collect per run'
+        required: false
+        default: '300'
+      platform:
+        description: 'Riot platform routing (e.g. jp1, kr)'
+        required: false
+        default: 'jp1'
+      tiers:
+        description: 'Comma-separated rank tiers to seed'
+        required: false
+        default: 'EMERALD,DIAMOND,MASTER,GRANDMASTER,CHALLENGER'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  collect-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      RIOT_PLATFORM: ${{ github.event.inputs.platform || 'jp1' }}
+      COLLECT_TIERS: ${{ github.event.inputs.tiers || 'EMERALD,DIAMOND,MASTER,GRANDMASTER,CHALLENGER' }}
+      COLLECT_TARGET_MATCHES: ${{ github.event.inputs.matches || '300' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Sync Data Dragon and detect current patch
+        id: patch
+        run: |
+          node src/collector/syncDdragonCli.ts
+          PATCH=$(node -e "const d = require('./data/ddragon/latest.json'); console.log(d.patch.split('.').slice(0,2).join('.'))")
+          echo "patch=$PATCH" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached raw matches for current patch
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: lol-raw-${{ env.RIOT_PLATFORM }}-${{ steps.patch.outputs.patch }}-${{ github.run_id }}
+          restore-keys: |
+            lol-raw-${{ env.RIOT_PLATFORM }}-${{ steps.patch.outputs.patch }}-
+
+      - name: Collect and aggregate Match-V5 stats
+        env:
+          RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
+        run: |
+          node src/collector/collectCli.ts --matches="${{ env.COLLECT_TARGET_MATCHES }}" --platform="${{ env.RIOT_PLATFORM }}" --tiers="${{ env.COLLECT_TIERS }}"
+
+      - name: Prepare GitHub Pages artifact (_site)
+        run: |
+          rm -rf _site
+          mkdir -p _site
+          cp data/stats/stats-latest.json _site/stats-latest.json
+          cp data/ddragon/latest.json _site/ddragon-latest.json
+          node -e "
+            const fs = require('node:fs');
+            const s = JSON.parse(fs.readFileSync('_site/stats-latest.json', 'utf8'));
+            const html = \`<!doctype html>
+            <html lang='ja'><head><meta charset='utf-8'><title>LoL Draft Companion Stats Feed</title></head>
+            <body style='font-family:sans-serif;background:#0a1019;color:#e6edf5;padding:32px'>
+              <h1>LoL Draft Companion 統計フィード</h1>
+              <p>パッチ: <strong>\${s.patch}</strong> / プラットフォーム: <strong>\${s.platform}</strong></p>
+              <p>集計試合数: <strong>\${s.totalMatches}</strong> / 更新日時: <strong>\${s.generatedAt}</strong></p>
+              <p><a style='color:#0ac8b9' href='./stats-latest.json'>stats-latest.json</a> | <a style='color:#0ac8b9' href='./ddragon-latest.json'>ddragon-latest.json</a></p>
+            </body></html>\`;
+            fs.writeFileSync('_site/index.html', html, 'utf8');
+          "
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
